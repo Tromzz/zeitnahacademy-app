@@ -1,27 +1,24 @@
+import CookieManager from '@react-native-cookies/cookies';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
-import {
-  BackHandler,
-  Platform,
-  StyleSheet,
-  View
-} from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { BackHandler, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
-// Keep splash screen visible
-SplashScreen.preventAutoHideAsync();
+// Ensure we control when splash hides (ignore promise rejection if already prevented)
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
-const APP_URL = 'https://zeitnahacademy.com/';
+const APP_URL = 'https://zeitnahacademy.com';
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
-  const [appReady, setAppReady] = useState(false);
-  const [webViewLoaded, setWebViewLoaded] = useState(false);
+  const [webViewLoaded, setWebViewLoaded] = useState(false); // true after first page load
+  const [fontsReady] = useState(true); // (Optional) set to fontsLoaded if you actually load custom fonts
+  const [splashHidden, setSplashHidden] = useState(false);
   const [webViewKey, setWebViewKey] = useState(1);
   const [canGoBack, setCanGoBack] = useState(false);
   const [statusBarStyle, setStatusBarStyle] = useState<'light' | 'dark' | 'auto'>('light');
@@ -46,19 +43,17 @@ export default function RootLayout() {
     }
   }, [canGoBack]);
 
-  // App ready
+  // Hide splash only when WebView has loaded and (optionally) fonts are ready.
   useEffect(() => {
-    if ((fontsLoaded || fontError) && webViewLoaded) {
-      SplashScreen.hideAsync().catch(console.error);
-      setAppReady(true);
+    if (!splashHidden && webViewLoaded && fontsReady) {
+      // Small delay to avoid tearing/flicker between splash and first WebView paint
+      const t = setTimeout(() => {
+        SplashScreen.hideAsync().catch(() => {});
+        setSplashHidden(true);
+      }, 80);
+      return () => clearTimeout(t);
     }
-  }, [fontsLoaded, fontError, webViewLoaded]);
-
-  // Fallback splash timeout
-  useEffect(() => {
-    const timeout = setTimeout(() => setWebViewLoaded(true), 2000);
-    return () => clearTimeout(timeout);
-  }, []);
+  }, [webViewLoaded, fontsReady, splashHidden]);
 
   // Navigation handler
   const handleNavChange = (navState: any) => {
@@ -69,13 +64,23 @@ export default function RootLayout() {
     }
   };
 
-  // WebView message handler (color scheme)
+  // WebView message handler (color scheme and logout)
   const handleMessage = (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
+
       if (data.type === 'colorScheme') {
         setStatusBarStyle(data.isDark ? 'light' : 'dark');
       }
+
+      if (data.type === 'logout') {
+        // Clear cookies & web storage
+        CookieManager.clearAll(true).then(() => {
+          console.log('Cookies cleared after logout');
+          setWebViewKey(prev => prev + 1); // Reload WebView to fresh state
+        });
+      }
+
     } catch (err) {
       console.error('Error parsing message from WebView', err);
     }
@@ -94,104 +99,11 @@ export default function RootLayout() {
     setWebViewLoaded(true);
   };
 
-  // Comprehensive zoom prevention JavaScript
-  const injectedJavaScript = `
-    (function() {
-      // 1. Add viewport meta tag
-      var meta = document.createElement('meta');
-      meta.name = 'viewport';
-      meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-      var head = document.getElementsByTagName('head')[0];
-      if (head) {
-        var existingViewport = head.querySelector('meta[name="viewport"]');
-        if (existingViewport) {
-          head.removeChild(existingViewport);
-        }
-        head.appendChild(meta);
-      }
+  const handleLoadEnd = useCallback(() => {
+    setWebViewLoaded(true);
+  }, []);
 
-      // 2. Prevent pinch-to-zoom
-      function preventZoom(e) {
-        if (e.touches.length > 1) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }
-
-      // 3. Prevent double-tap zoom
-      var lastTouchEnd = 0;
-      function preventDoubleTapZoom(e) {
-        var now = Date.now();
-        if (now - lastTouchEnd <= 300) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-        lastTouchEnd = now;
-      }
-
-      // 4. Add event listeners
-      document.addEventListener('touchstart', preventZoom, { passive: false });
-      document.addEventListener('touchend', preventDoubleTapZoom, { passive: false });
-      document.addEventListener('touchmove', preventZoom, { passive: false });
-
-      // 5. Additional prevention for iOS
-      document.addEventListener('gesturestart', function(e) {
-        e.preventDefault();
-      }, { passive: false });
-
-      // 6. Force scale to 1 if it changes
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', function() {
-          if (window.visualViewport.scale !== 1) {
-            window.visualViewport.scale = 1;
-          }
-        });
-      }
-
-      // 7. Disable text size adjustment
-      document.documentElement.style.webkitTextSizeAdjust = 'none';
-      document.body.style.webkitTextSizeAdjust = 'none';
-
-      // 8. Disable callout and selection
-      document.documentElement.style.webkitTouchCallout = 'none';
-      document.documentElement.style.userSelect = 'none';
-      document.body.style.webkitTouchCallout = 'none';
-      document.body.style.userSelect = 'none';
-
-      // 9. Prevent zoom via keyboard
-      document.addEventListener('keydown', function(e) {
-        if (e.ctrlKey && (e.key === '+' || e.key === '-' || e.key === '0')) {
-          e.preventDefault();
-        }
-      });
-
-      // 10. Mutation observer to ensure meta tag stays
-      var observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-          if (mutation.type === 'childList') {
-            var viewportMeta = document.querySelector('meta[name="viewport"]');
-            if (!viewportMeta || !viewportMeta.content.includes('user-scalable=no')) {
-              if (head) {
-                var newMeta = document.createElement('meta');
-                newMeta.name = 'viewport';
-                newMeta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-                if (viewportMeta) {
-                  head.replaceChild(newMeta, viewportMeta);
-                } else {
-                  head.appendChild(newMeta);
-                }
-              }
-            }
-          }
-        });
-      });
-
-      if (head) {
-        observer.observe(head, { childList: true, subtree: true });
-      }
-    })();
-    true;
-  `;
+  const injectedBeforeContent = `document.addEventListener('DOMContentLoaded', function(){window.ReactNativeWebView.postMessage(JSON.stringify({type:'domReady'}));});true;`;
 
   const WebViewComponent = (
     <WebView
@@ -206,28 +118,23 @@ export default function RootLayout() {
       thirdPartyCookiesEnabled
       cacheEnabled
       scrollEnabled
+      keyboardDisplayRequiresUserAction
       showsVerticalScrollIndicator={false}
       bounces={false}
       mediaPlaybackRequiresUserAction={false}
       allowsInlineMediaPlayback
       onNavigationStateChange={handleNavChange}
-      onLoadEnd={() => setWebViewLoaded(true)}
+      onLoadEnd={handleLoadEnd}
       onError={handleWebViewError}
       onHttpError={handleWebViewHttpError}
       onMessage={handleMessage}
-      injectedJavaScript={injectedJavaScript}
-      injectedJavaScriptBeforeContentLoaded={`
-        // Early viewport setup before content loads
-        var meta = document.createElement('meta');
-        meta.name = 'viewport';
-        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-        document.head = document.head || document.getElementsByTagName('head')[0];
-        document.head.appendChild(meta);
-        true;
-      `}
       scalesPageToFit={false}
       androidLayerType="hardware"
       setBuiltInZoomControls={false}
+      startInLoadingState
+      renderLoading={() => <View style={styles.webviewLoading} />}
+      injectedJavaScriptBeforeContentLoaded={injectedBeforeContent}
+      originWhitelist={["*"]}
     />
   );
 
@@ -237,12 +144,12 @@ export default function RootLayout() {
   ];
 
   return (
-    <View style={styles.fullScreenContainer}>
+  <View style={styles.fullScreenContainer}>
       <StatusBar style={statusBarStyle} />
       <View
         style={[
           ...containerStyle,
-          { backgroundColor: statusBarStyle === 'light' ? '#000' : '#fff' }
+      { backgroundColor: statusBarStyle === 'light' ? '#020100' : '#FFFFFF' }
         ]}
       >
         {WebViewComponent}
@@ -254,11 +161,18 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   fullScreenContainer: {
     flex: 1,
+    backgroundColor: '#020100',
   },
   container: {
     flex: 1,
+    backgroundColor: '#020100',
   },
   webview: {
     flex: 1,
+    backgroundColor: 'transparent',
+  },
+  webviewLoading: {
+    flex: 1,
+    backgroundColor: '#020100',
   },
 });
