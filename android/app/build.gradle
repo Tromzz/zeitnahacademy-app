@@ -92,8 +92,8 @@ android {
         applicationId 'com.primefxt.ZeitnahAcademy'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 10001
+        versionName "1.0.1"
     }
     signingConfigs {
         debug {

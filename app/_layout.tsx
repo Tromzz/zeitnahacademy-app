@@ -140,7 +140,10 @@ export default function RootLayout() {
 
   const containerStyle = [
     styles.container,
-    { paddingTop: insets.top },
+    { 
+      paddingTop: insets.top,
+      paddingBottom: insets.bottom,
+    },
   ];
 
   return (
